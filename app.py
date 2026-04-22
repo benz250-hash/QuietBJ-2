@@ -1396,10 +1396,19 @@ def render_debug_card(geocode_used: dict[str, Any] | None, building_location_tex
             st.write(f"楼栋缓存：{COMMUNITY_BUILDING_CACHE_FILE.name}")
             st.write("评分架构：主 engine 汇总 / 从属 engine 出分")
             st.write("道路逻辑：高速/主干/次干/小路分别保留，遮挡修正单独作为缓冲项叠加，不会替代高速因素。")
-            st.write("原始道路候选：")
+            st.write("高德原始 roads（reverse_geocode 直接返回）：")
+            st.write([
+                {
+                    "name": str(item.get("name", "")).strip(),
+                    "distance": str(item.get("distance", "")).strip(),
+                    "location": str(item.get("location", "")).strip(),
+                    "direction": str(item.get("direction", "")).strip(),
+                }
+                for item in list((regeo or {}).get("roads", []) or [])
+            ])
+            st.write("当前程序使用的道路候选（去重后）：")
             st.write((regeo or {}).get("_raw_roads_debug", []))
-            st.write("说明：v516 正式查询不再调 input_tips；道路只使用 reverse geocode 返回的 roads，本地分级筛选；POI 默认只查轨道/商业/餐饮三类。")
-            st.write("说明：v511 只使用 reverse geocode 返回的 roads，本地分级筛选；同一地址的 geocode / regeo / around 已加缓存。")
+            st.write("说明：这里第一块是高德 reverse_geocode 原始返回的 roads；第二块是当前程序真正用于后续道路分级筛选的候选集合。")
         with c2:
             st.markdown("**高德候选**")
             if tip_list:
