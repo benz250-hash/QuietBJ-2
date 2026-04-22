@@ -63,3 +63,9 @@ v512 patch notes:
 - Reduced fixed POI around searches from 5 to 3 (commercial / restaurant / rail).
 - School and hospital are disabled by default to save API.
 - Added API_LOGIC_v512.txt with simple Chinese notes.
+
+
+v513 hotfix:
+- Fixed NameError in augment_regeo_with_high_priority_roads.
+- Removed stale classify_road_kind dependency from app-side road augmentation.
+- Road augmentation now only dedupes reverse geocode roads and does not trigger extra highway supplement calls.

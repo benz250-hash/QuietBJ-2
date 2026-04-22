@@ -1304,7 +1304,7 @@ def render_debug_card(geocode_used: dict[str, Any] | None, building_location_tex
             st.write("道路逻辑：高速/主干/次干/小路分别保留，遮挡修正单独作为缓冲项叠加，不会替代高速因素。")
             st.write("原始道路候选：")
             st.write((regeo or {}).get("_raw_roads_debug", []))
-            st.write("说明：v512 正式查询不再调 input_tips；道路只使用 reverse geocode 返回的 roads，本地分级筛选；POI 默认只查轨道/商业/餐饮三类。")
+            st.write("说明：v513 正式查询不再调 input_tips；道路只使用 reverse geocode 返回的 roads，本地去重后下游分级筛选；POI 默认只查轨道/商业/餐饮三类。")
             st.write("说明：v511 只使用 reverse geocode 返回的 roads，本地分级筛选；同一地址的 geocode / regeo / around 已加缓存。")
         with c2:
             st.markdown("**高德候选**")
