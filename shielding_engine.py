@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,101 +53,6 @@ def load_building_cache(path: str | Path = CACHE_FILE) -> dict[str, Any]:
 def save_building_cache(data: dict[str, Any], path: str | Path = CACHE_FILE) -> None:
     file_path = Path(path)
     file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def collect_cache_stats(cache: dict[str, Any]) -> dict[str, int]:
-    community_count = 0
-    building_count = 0
-    for _, value in (cache or {}).items():
-        community_count += 1
-        building_count += len(list((value or {}).get("buildings", []) or []))
-    return {
-        "community_count": community_count,
-        "building_count": building_count,
-    }
-
-
-def build_cache_export_payload(
-    cache: dict[str, Any],
-    app_version: str = "v513",
-) -> dict[str, Any]:
-    stats = collect_cache_stats(cache)
-    return {
-        "schema_version": "quietbj_cache_v1",
-        "exported_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "app_version": app_version,
-        "stats": stats,
-        "communities": cache or {},
-    }
-
-
-def normalize_import_payload(payload: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return False, "导入文件不是合法的 JSON 对象。", {}
-    schema_version = str(payload.get("schema_version", "")).strip()
-    if schema_version != "quietbj_cache_v1":
-        return False, f"schema_version 不匹配：当前只支持 quietbj_cache_v1，收到的是 {schema_version or '空值'}。", {}
-    communities = payload.get("communities", {})
-    if not isinstance(communities, dict):
-        return False, "communities 字段格式不正确，必须是对象。", {}
-    normalized: dict[str, Any] = {}
-    for community_name, entry in communities.items():
-        if not isinstance(entry, dict):
-            continue
-        buildings = list(entry.get("buildings", []) or [])
-        clean_buildings: list[dict[str, Any]] = []
-        for item in buildings:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name", "")).strip()
-            token = str(item.get("building_token", "")).strip()
-            try:
-                lon = float(item.get("lon"))
-                lat = float(item.get("lat"))
-            except Exception:
-                continue
-            if not token:
-                continue
-            clean_buildings.append({
-                "name": name or f"{community_name}{token}",
-                "building_token": token,
-                "lon": lon,
-                "lat": lat,
-            })
-        normalized[str(community_name).strip()] = {
-            "source": str(entry.get("source", "import")).strip() or "import",
-            "updated_at": str(entry.get("updated_at", "")).strip() or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "buildings": clean_buildings,
-        }
-    return True, "OK", normalized
-
-
-def merge_cache_payload(
-    current_cache: dict[str, Any],
-    import_payload: dict[str, Any],
-) -> dict[str, Any]:
-    ok, msg, imported = normalize_import_payload(import_payload)
-    if not ok:
-        raise ValueError(msg)
-
-    merged = dict(current_cache or {})
-    for community_name, entry in imported.items():
-        for building in list(entry.get("buildings", []) or []):
-            merged = upsert_building_point(
-                cache=merged,
-                community_name=community_name,
-                building=building,
-                source="import_merge",
-                updated_at=entry.get("updated_at", ""),
-            )
-    return merged
-
-
-def replace_cache_from_payload(import_payload: dict[str, Any]) -> dict[str, Any]:
-    ok, msg, imported = normalize_import_payload(import_payload)
-    if not ok:
-        raise ValueError(msg)
-    return imported
 
 
 def _find_best_cache_key(cache: dict[str, Any], community_name: str) -> str | None:
