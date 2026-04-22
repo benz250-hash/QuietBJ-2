@@ -1,0 +1,19 @@
+QuietBJ v501 patch notes
+
+1. 架构边界修正
+- score_engine 作为唯一结算层。
+- noise_point_engine / building_engine / shielding_engine 只返回证据型 EngineResult，score_delta 固定为 0。
+- penalty / bonus / shielding correction 全部在 score_engine.aggregate 内生成。
+
+2. 北京道路分类
+- 引入 S/A/B/C/D/E 六级道路噪音体系。
+- 保留北京道路白名单 + 关键词兜底。
+- road evidence 新增 road_tier / road_tier_label / road_kind。
+
+3. 遮挡修正
+- shielding_engine 只返回遮挡事实。
+- score_engine 根据 road_tier + distance + shielding_level 计算 raw_impact / adjusted_impact / correction。
+
+4. app 边界收口
+- 删除 app 内遗留的本地 penalty helper，避免未来又把结算逻辑写回展示层。
+- build_engine_results 处增加注释，明确这里只组装 evidence。

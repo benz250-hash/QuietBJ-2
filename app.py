@@ -93,66 +93,6 @@ def _to_int_distance(value: Any) -> int | None:
         return None
 
 
-def score_signal_by_label(score_engine: ScoreEngine, label: str, distance_m: Any) -> int:
-    distance = _to_int_distance(distance_m)
-    if distance is None:
-        return 0
-    text = str(label or "").strip()
-    cfg = score_engine.cfg
-    if "高速" in text or "快速路" in text:
-        return score_engine.band_score(distance, cfg.expressway_bands)
-    if "主干路" in text:
-        return score_engine.band_score(distance, cfg.arterial_bands)
-    if "次干路" in text:
-        return score_engine.band_score(distance, cfg.secondary_bands)
-    if "小区内部路" in text or "内部路" in text:
-        return score_engine.band_score(distance, cfg.internal_bands)
-    if "小路" in text or "支路" in text:
-        return score_engine.band_score(distance, cfg.local_bands)
-    if "轨道" in text or "地铁" in text:
-        return score_engine.band_score(distance, cfg.rail_bands)
-    if "学校" in text:
-        return score_engine.band_score(distance, cfg.school_bands)
-    if "医院" in text:
-        return score_engine.band_score(distance, cfg.hospital_bands)
-    if "餐饮" in text:
-        return score_engine.band_score(distance, cfg.restaurant_bands)
-    if "商业" in text or "底商" in text or "商场" in text or "超市" in text or "便利店" in text:
-        return score_engine.band_score(distance, cfg.commercial_bands)
-    return int(distance <= 80)
-
-
-def refine_noise_summary(noise_summary: dict[str, Any], score_engine: ScoreEngine) -> dict[str, Any]:
-    signals = list(noise_summary.get("signals", []) or [])
-    refined: list[dict[str, Any]] = []
-    for sig in signals:
-        row = dict(sig)
-        row["penalty"] = score_signal_by_label(score_engine, row.get("label", ""), row.get("distance_m", ""))
-        refined.append(row)
-
-    # local/internal synthetic cap if those labels exist
-    local_total = sum(
-        int(item.get("penalty", 0))
-        for item in refined
-        if any(x in str(item.get("label", "")) for x in ["小路", "支路", "内部路", "小区内部路"])
-    )
-    if local_total > 4:
-        overflow = local_total - 4
-        for item in reversed(refined):
-            if overflow <= 0:
-                break
-            if any(x in str(item.get("label", "")) for x in ["小路", "支路", "内部路", "小区内部路"]):
-                current = int(item.get("penalty", 0))
-                if current <= 0:
-                    continue
-                reduce_by = min(current, overflow)
-                item["penalty"] = current - reduce_by
-                overflow -= reduce_by
-
-    total_penalty = sum(int(item.get("penalty", 0)) for item in refined)
-    return {"signals": refined, "total_penalty": total_penalty}
-
-
 def _distance_between_gcj_points_m(a: tuple[float, float], b: tuple[float, float]) -> float:
     # 用近似平面距离即可，当前只用于同小区量级的相对匹配
     import math
@@ -163,107 +103,6 @@ def _distance_between_gcj_points_m(a: tuple[float, float], b: tuple[float, float
     dx = (a[0] - b[0]) * m_per_deg_lon
     dy = (a[1] - b[1]) * m_per_deg_lat
     return math.hypot(dx, dy)
-
-
-def road_kind_from_label(label: str) -> str:
-    text = str(label or "").strip()
-    if "高速" in text or "快速路" in text:
-        return "expressway"
-    if "主干路" in text:
-        return "arterial"
-    if "次干路" in text:
-        return "secondary"
-    if "小区内部路" in text or "内部路" in text:
-        return "internal"
-    if "小路" in text or "支路" in text:
-        return "local"
-    return ""
-
-
-def choose_road_point_for_signal(
-    target_point: tuple[float, float],
-    signal_distance_m: Any,
-    regeo: dict[str, Any] | None,
-) -> tuple[float, float] | None:
-    roads = list((regeo or {}).get("roads", []) or [])
-    candidates: list[tuple[float, tuple[float, float]]] = []
-    distance_hint = _to_int_distance(signal_distance_m)
-    for road in roads:
-        parsed = parse_location_text(str(road.get("location", "")).strip())
-        if not parsed:
-            continue
-        actual = _distance_between_gcj_points_m(target_point, parsed)
-        if distance_hint is None:
-            gap = actual
-        else:
-            gap = abs(actual - distance_hint)
-        candidates.append((gap, parsed))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])
-    return candidates[0][1]
-
-
-def apply_road_shielding(
-    noise_summary: dict[str, Any],
-    community_row: dict[str, Any],
-    building_location_text: str,
-    regeo: dict[str, Any] | None,
-    cache_path: str | Path = COMMUNITY_BUILDING_CACHE_FILE,
-) -> dict[str, Any]:
-    target_point = parse_location_text(building_location_text)
-    detail_token = str(community_row.get("_detail_token", "")).strip()
-    community_name = str(community_row.get("community_name", "")).strip()
-    if not target_point or not detail_token or not community_name:
-        return noise_summary
-
-    cache = load_building_cache(cache_path)
-    building_points = get_cached_buildings(cache, community_name)
-    if not building_points:
-        return noise_summary
-
-    refined: list[dict[str, Any]] = []
-    changed = False
-    for sig in list(noise_summary.get("signals", []) or []):
-        row = dict(sig)
-        kind = road_kind_from_label(row.get("label", ""))
-        if not kind:
-            refined.append(row)
-            continue
-
-        road_point = choose_road_point_for_signal(target_point, row.get("distance_m", ""), regeo)
-        if not road_point:
-            refined.append(row)
-            continue
-
-        shielding = infer_shielding(
-            target_point=target_point,
-            road_point=road_point,
-            building_points=building_points,
-            target_building_token=detail_token,
-            corridor_width_m=20.0,
-        )
-        adjusted = apply_shielding_to_road_impact(
-            raw_impact=int(row.get("penalty", 0)),
-            shielding_level=shielding["shielding_level"],
-            road_kind=kind,
-        )
-        row["raw_penalty"] = adjusted["raw_impact"]
-        row["penalty"] = adjusted["adjusted_impact"]
-        row["shielding_level"] = adjusted["shielding_level"]
-        row["shielding_factor"] = adjusted["factor"]
-        row["blocker_count"] = shielding["blocker_count"]
-        row["blocker_names"] = shielding["blocker_names"]
-        if adjusted["adjusted_impact"] != adjusted["raw_impact"]:
-            changed = True
-        refined.append(row)
-
-    total_penalty = sum(int(item.get("penalty", 0)) for item in refined)
-    result = dict(noise_summary)
-    result["signals"] = refined
-    result["total_penalty"] = total_penalty
-    result["shielding_applied"] = changed
-    return result
 
 
 def load_building_overrides(path: str | Path = BUILDING_OVERRIDES_FILE) -> dict[tuple[str, str], dict[str, str]]:
@@ -422,6 +261,8 @@ def augment_regeo_with_high_priority_roads(
     ]
     return base
 
+
+# 评分边界：这里只组装证据型 EngineResult，所有 penalty/bonus 均在 score_engine.aggregate 内完成。
 
 def build_engine_results(
     community_row: dict[str, Any],

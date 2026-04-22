@@ -331,38 +331,31 @@ def build_shielding_result(
     if level == "none":
         return None
 
-    raw = abs(int(road_result.score_delta))
-    road_kind = str(road_result.evidence.get("road_kind", "arterial")).strip()
-    factor_map = LOCAL_SHIELDING_FACTOR if road_kind in {"local", "internal"} else ROAD_SHIELDING_FACTOR
-    factor = factor_map.get(level, 1.0)
-    adjusted = max(1, round(raw * factor)) if raw > 0 else 0
-    correction = raw - adjusted
-    if correction <= 0:
-        return None
+    road_tier = str(road_result.evidence.get("road_tier", "D")).strip() or "D"
+    road_kind = str(road_result.evidence.get("road_kind", "secondary")).strip() or "secondary"
 
     return EngineResult(
         engine="shielding_engine",
         enabled=True,
-        score_delta=correction,
+        score_delta=0,
         confidence=0.70 if level == "strong" else 0.78,
         category="shielding",
         priority=80,
         evidence={
             "road_engine_label": road_result.display.label,
             "road_name": road_result.evidence.get("road_name", ""),
+            "road_tier": road_tier,
             "road_kind": road_kind,
-            "raw_impact": raw,
-            "adjusted_impact": adjusted,
+            "distance_m": road_result.evidence.get("distance_m"),
             "shielding_level": level,
             "blocker_count": shielding["blocker_count"],
             "blocker_names": shielding["blocker_names"],
         },
-        explanation=f"前排遮挡 {level}，道路影响由 {raw} 修正为 {adjusted}。",
+        explanation=f"识别到前排遮挡：{level}，挡住 {shielding['blocker_count']} 栋。",
         display=DisplayPayload(
             label="遮挡修正",
             detail=f"{level}｜挡住 {shielding['blocker_count']} 栋",
-            value_text=f"+{correction}",
+            value_text="",
         ),
         weight_hint=1.0,
-        max_effective_delta=correction,
     )
