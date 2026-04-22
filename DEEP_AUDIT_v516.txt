@@ -1,0 +1,25 @@
+静态代码核查结果（v516）
+
+一、这次立刻修改了什么
+- 已删除正式查询里的 input_tips 调用。
+- 已删除高速 / 快速路 / G6 / G7 / 环路 / 高架 的补查 around 搜索。
+- 道路底座恢复为：只使用 reverse_geocode().roads，本地分级筛选。
+
+二、正式查询 API 调用链（按当前代码实际行为）
+1. geocode(query) —— 地址转经纬度
+2. geocode(cleaned_query)【可选】—— geocode 失败时重试
+3. reverse_geocode(location) —— 拿周边 roads 与结构化地址
+4. search_around(... 商业/生活服务) —— 查商业
+5. search_around(... 餐饮服务) —— 查餐饮
+6. search_around(... 地铁站) —— 查轨道
+
+常见次数：5 次；最坏次数：6 次。
+
+三、关键逻辑核查
+- 楼栋缓存仍会在查询成功后自动写入 community_building_cache.json。
+- 遮挡算法仍会用同小区缓存楼栋点判断 none / partial / strong。
+- 遮挡修正仍作为单独缓冲项，不替代原始道路项。
+- 影响来源面板仍显示原始值 -> 采纳后值。
+
+四、结果
+- 这版终于和“必须立刻去掉 input_tips + 去掉高速补查”的要求一致。

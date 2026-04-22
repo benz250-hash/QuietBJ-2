@@ -1,0 +1,55 @@
+QuietBJ v511 API 调用逻辑（中文说明）
+
+一、一次正式查询时，程序会按下面顺序调用高德 API：
+
+1）input_tips
+- 作用：把用户输入补全成候选地址，顺便拿 district 提示。
+- 例子：用户输入“国奥村西区16号楼”。
+
+2）geocode(query)
+- 作用：先用原始输入直接转经纬度。
+
+3）geocode(cleaned_query)【可选】
+- 作用：只有第 2 步失败时，才会用清洗后的地址再试一次。
+- 所以这一笔不是每次都有。
+
+4）reverse_geocode(location)
+- 作用：根据楼栋点拿 roads、AOI、POI、结构化地址。
+- v511 的道路底座就来自这里返回的 roads。
+
+5）search_around(location, 关键词, radius)
+- 固定查 5 组周边：
+  - 学校
+  - 医院
+  - 商业
+  - 餐饮
+  - 地铁站
+
+二、v511 和 v509/v510 的区别
+
+- v511 不再额外补查高速 / 快速路 / 环路 / G6 等。
+- 也就是说，v511 回到“只用 reverse_geocode().roads，再本地分级筛选”的旧逻辑。
+- 这样 API 次数更低，也更接近重整前。
+
+三、单次查询 API 次数
+
+常见情况：
+- input_tips：1 次
+- geocode：1 次
+- reverse_geocode：1 次
+- search_around：5 次
+合计：8 次
+
+最坏情况（第一次 geocode 失败）：
+- 多 1 次 cleaned_query geocode
+合计：9 次
+
+四、缓存
+
+v511 已加 Streamlit cache：
+- 同一个关键词 input_tips 不重复打
+- 同一个地址 geocode 不重复打
+- 同一个坐标 reverse_geocode 不重复打
+- 同一个 location + keyword + radius 的 search_around 不重复打
+
+所以在同一会话里反复 rerun 时，实际 HTTP 请求会明显少于 8/9 次。

@@ -1,0 +1,45 @@
+静态代码核查结果（v515）
+
+一、架构总览
+- app.py：主控 / orchestration 层，负责查询流程、页面展示、缓存管理。
+- score_engine.py：主引擎，负责汇总各从属引擎结果并输出最终 ScoreBreakdown。
+- noise_point_engine.py：从属引擎，负责道路 / 轨道 / 商业 / 餐饮等基础环境影响建议分。
+- shielding_engine.py：从属引擎，负责楼栋点缓存、遮挡判断、缓存导入导出。
+- building_engine.py：从属引擎，负责楼栋位置、建筑年份、容积率、override 建议分。
+- engine_schema.py：统一主从引擎返回结构。
+
+二、API 调用链（按当前代码实际行为，不按口头目标）
+- 正式查询时 仍然会 调用 input_tips。
+- geocode(query) 一定会调用；geocode(cleaned_query) 在第一次 geocode 失败时重试。
+- reverse_geocode(location) 会调用一次，用于拿道路候选与结构化地址。
+- 默认固定 around 搜索次数：3 次。当前代码里是商业 / 餐饮 / 地铁站三类。
+- 高优先级道路补查逻辑仍然存在：当 reverse_geocode().roads 里缺少高速/快速路时，最多按 8 个关键词再发起 around 搜索。
+
+三、重要逻辑核查
+1）楼栋缓存是否会自动写入：会。
+- 查询成功识别出 community_name + building_token + 楼栋点后，会写入 community_building_cache.json。
+- 后续遮挡判断会读取同小区缓存，前排楼栋点可能影响后楼的遮挡等级与道路修正。
+
+2）缓存导出 / 导入是否完整：是。
+- 已支持导出 quietbj_cache_v1 格式。
+- 已支持合并导入与完全覆盖。
+- 已支持删除单个小区缓存与清空全部缓存。
+
+3）道路底座逻辑：
+- 主要底座仍然是 reverse_geocode().roads。
+- 但当前 app.py 里仍保留“高速补查”增强逻辑，因此 API 行为已经不等同于“只用 reverse_geocode().roads”的纯旧逻辑。
+- noise_point_engine.py 会对 roads 本地分级：expressway / arterial / secondary / local / internal，并对每个等级取最近一条。
+
+4）展示层逻辑：
+- 影响来源面板显示的是“主引擎采纳后的 score_delta”，并在 raw_score_delta 与 effective_score_delta 不一致时显示“原始 -> 采纳后”。
+- 遮挡修正作为单独缓冲项存在，不会直接替代原始道路项。
+
+四、当前静态审计发现的主要问题
+- A. app.py 里正式查询仍调用 input_tips，这与“正式查询不再调 input_tips”的说明不一致，会增加 API 次数。
+- B. app.py 里仍保留高速 / 快速路 / G6 等补查逻辑，这与“回到仅依赖 reverse_geocode().roads 的旧逻辑”不一致，会增加 API 次数。
+- C. README / API_LOGIC 文档与当前代码行为存在版本残留，说明文案和实际调用链不完全一致。
+
+五、结论
+- 这份工程可以运行，主从引擎与缓存管理结构已成型。
+- 但如果目标是“尽量省 API，并严格回到 v512 之前的低调用道路底座逻辑”，当前代码并未完全达成。
+- 这次审计是静态代码审计 + 全部 .py 语法编译检查，不包含真实高德线上返回结果的端到端回放。

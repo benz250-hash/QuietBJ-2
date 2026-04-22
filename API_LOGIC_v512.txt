@@ -1,0 +1,62 @@
+QuietBJ v512 API 调用逻辑（中文说明）
+
+一、正式点击“查询”时，程序按下面顺序调用高德 API：
+
+1）geocode(query)
+- 中文注释：原始输入转经纬度
+- 作用：先把“国奥村西区16号楼”这类输入转成楼栋点
+
+2）geocode(cleaned_query)【可选】
+- 中文注释：原始 geocode 失败后，再用清洗后的地址重试
+- 说明：只有第 1 次 geocode 失败时才会发生
+
+3）reverse_geocode(location)
+- 中文注释：根据楼栋点拿周边道路和结构化地址
+- 作用：道路底座来自这里返回的 roads
+- v512 不再额外补查高速/快速路关键词
+
+4）search_around(location, "便利店 超市 商场 购物服务 生活服务", radius=300)
+- 中文注释：查附近商业 / 生活服务
+- 作用：估算近场生活活跃度和底商干扰
+
+5）search_around(location, "餐饮服务", radius=300)
+- 中文注释：查附近餐饮
+- 作用：估算近场餐饮和夜间扰动
+
+6）search_around(location, "地铁站", radius=800)
+- 中文注释：查附近轨道交通
+- 作用：估算轨道影响
+
+二、v512 刻意不做的调用
+
+1）正式查询时不再调 input_tips
+- 输入联想可以单独做
+- 但正式查询为了省 API，不再调用 input_tips
+
+2）不再额外补查高速 / 快速路 / G6 / G7
+- 只使用 reverse_geocode().roads
+- 再在本地按道路等级分级筛选
+
+3）学校 / 医院默认不查
+- 后续如果需要，可以做“深度模式”再加
+
+三、单次正式查询的 API 次数
+
+常见情况：
+- geocode：1 次
+- reverse_geocode：1 次
+- around：3 次（商业、餐饮、地铁）
+合计：5 次
+
+最坏情况（第一次 geocode 失败）：
+- 多 1 次 cleaned_query geocode
+合计：6 次
+
+四、缓存
+
+当前 app.py 已加缓存：
+- 同一个地址 geocode 不重复打
+- 同一个坐标 reverse_geocode 不重复打
+- 同一个 location + keyword + radius 的 around 不重复打
+
+所以同一会话里反复 rerun 时，真实 HTTP 请求通常会少于 5/6 次。

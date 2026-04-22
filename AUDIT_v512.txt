@@ -1,0 +1,20 @@
+QuietBJ full engineering bundle v512
+
+Audit results:
+[OK] amap_provider.py
+[OK] app.py
+[OK] building_engine.py
+[OK] community_repository.py
+[OK] config.py
+[OK] engine_schema.py
+[OK] noise_point_engine.py
+[OK] score_engine.py
+[OK] shielding_engine.py
+[OK] text_match.py
+[OK] zone_repository.py
+
+External API entry points:
+- amap_provider.AMapProvider.geocode   # 中文注释：地址转经纬度
+- amap_provider.AMapProvider.reverse_geocode   # 中文注释：楼栋点拿周边道路和结构化地址
+- amap_provider.AMapProvider.search_around   # 中文注释：查商业/餐饮/地铁等周边要素
+- amap_provider.AMapProvider.input_tips   # 中文注释：输入联想（v512 正式查询默认不使用）

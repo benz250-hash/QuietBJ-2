@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -11,12 +12,12 @@ import streamlit as st
 
 from amap_provider import AMapProvider
 from community_repository import CommunityRepository
-from config import BACKGROUND_FILE, COMMUNITIES_FILE, COMMUNITY_ZONES_FILE, DEFAULT_BASE_SCORE, get_amap_api_key
+from config import AMAP_CITY, BACKGROUND_FILE, COMMUNITIES_FILE, COMMUNITY_ZONES_FILE, DEFAULT_BASE_SCORE, get_amap_api_key
 from building_engine import building_year_result, density_result, override_result, zone_result as engine_zone_result
 from engine_schema import EngineResult
 from noise_point_engine import NoisePointEngine
 from score_engine import ScoreEngine
-from shielding_engine import build_shielding_result, load_building_cache, save_building_cache, upsert_building_point
+from shielding_engine import build_cache_export_payload, build_shielding_result, collect_cache_stats, load_building_cache, merge_cache_payload, normalize_import_payload, replace_cache_from_payload, save_building_cache, upsert_building_point
 from text_match import strip_unit_details
 from zone_repository import ZoneRepository
 
@@ -24,6 +25,34 @@ st.set_page_config(page_title="QuietBJ｜安宁北京", page_icon="🔇", layout
 
 BUILDING_OVERRIDES_FILE = Path("building_overrides.csv")
 COMMUNITY_BUILDING_CACHE_FILE = Path("community_building_cache.json")
+
+# ---------- 高德 API 调用缓存层 ----------
+# 下面这几层只做一件事：把同一个参数下的高德请求缓存起来。
+# 这样 Streamlit 反复 rerun 时，不会因为同一个地址重复调用 API。
+
+@st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
+def cached_input_tips(api_key: str, keywords: str, city: str = AMAP_CITY) -> list[dict[str, Any]]:
+    """高德输入提示：把用户输入补全成候选地址。"""
+    return AMapProvider(api_key).input_tips(keywords, city)
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
+def cached_geocode(api_key: str, address: str, city: str = AMAP_CITY) -> dict[str, Any] | None:
+    """高德地理编码：把地址变成经纬度。"""
+    return AMapProvider(api_key).geocode(address, city)
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
+def cached_reverse_geocode(api_key: str, location: str) -> dict[str, Any] | None:
+    """高德逆地理编码：根据经纬度拿周边道路、POI、地址结构。"""
+    return AMapProvider(api_key).reverse_geocode(location)
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
+def cached_search_around(api_key: str, location: str, keywords: str, radius: int, city: str = AMAP_CITY) -> list[dict[str, Any]]:
+    """高德周边搜索：查学校/医院/商业/餐饮/地铁等周边要素。"""
+    return AMapProvider(api_key).search_around(location, keywords, radius=radius, city=city)
+
 
 # ---------- shared helpers ----------
 def file_to_base64(path: str | Path) -> str:
@@ -355,6 +384,43 @@ def road_point_for_engine_result(
         return None
     candidates.sort(key=lambda x: x[0])
     return candidates[0][1]
+
+
+def dedupe_road_candidates(roads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    merged: list[dict[str, Any]] = []
+    for road in roads:
+        name = str(road.get("name", "")).strip()
+        location = str(road.get("location", "")).strip()
+        key = (name, location)
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        merged.append(road)
+    return merged
+
+
+def augment_regeo_with_high_priority_roads(
+    amap: AMapProvider,
+    building_location_text: str,
+    regeo: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    # v516：回到低 API 道路底座逻辑
+    # 只使用 reverse_geocode 返回的 roads，在本地去重、分级、筛选
+    # 不再额外补查高速 / 快速路 / G6 / G7 等关键词
+    base = dict(regeo or {})
+    roads = list(base.get("roads", []) or [])
+    merged = dedupe_road_candidates(roads)
+    base["roads"] = merged
+    base["_raw_roads_debug"] = [
+        {
+            "name": str(item.get("name", "")).strip(),
+            "distance": str(item.get("distance", "")).strip(),
+            "source": "regeo",
+        }
+        for item in merged
+    ]
+    return base
 
 
 def build_engine_results(
@@ -814,14 +880,15 @@ def render_open_map_card(building_location_text: str, geocode_used: dict[str, An
 
 def parse_geocode_result(query: str, community_repo: CommunityRepository, amap: AMapProvider) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None, str, dict[str, Any] | None]:
     cleaned_query = strip_unit_details(query)
-    tips = amap.input_tips(query) if amap.enabled() else []
-    district_hint = str(tips[0].get("district", "")).strip() if tips else ""
+    # v516：正式查询不再调用 input_tips，减少一次 API 调用
+    tips: list[dict[str, Any]] = []
+    district_hint = ""
     community_match = community_repo.search(cleaned_query, district=district_hint)
-    geocode_full = amap.geocode(query) if amap.enabled() else None
-    geocode_clean = amap.geocode(cleaned_query) if amap.enabled() and not geocode_full else None
+    geocode_full = cached_geocode(amap.api_key, query) if amap.enabled() else None
+    geocode_clean = cached_geocode(amap.api_key, cleaned_query) if amap.enabled() and not geocode_full else None
     geocode_used = geocode_full or geocode_clean
     building_location_text = str((geocode_used or {}).get("location", "")).strip()
-    regeo = amap.reverse_geocode(building_location_text) if amap.enabled() and building_location_text else None
+    regeo = cached_reverse_geocode(amap.api_key, building_location_text) if amap.enabled() and building_location_text else None
     locator_meta = build_locator_meta(query, cleaned_query, tips, geocode_used, building_location_text)
 
     if community_match:
@@ -1188,6 +1255,131 @@ def render_position_card(result: dict[str, Any], zone_labels: list[str], zone_ke
         st.markdown(f"<div class='subtle' style='margin-top:6px;'>位置说明：{result['zone_description']}。</div>", unsafe_allow_html=True)
 
 
+
+def render_cache_manager(cache_path: str | Path = COMMUNITY_BUILDING_CACHE_FILE) -> None:
+    st.markdown("### 缓存管理")
+    with st.expander("楼栋缓存导出 / 导入 / 清理", expanded=False):
+        st.markdown(
+            "这个缓存文件会在用户查询后自动增长，主要用于**前排遮挡判断**。"
+            " 由于部署环境重启后本地可写文件可能丢失，建议定期导出到本地备份，重启后再导入恢复。"
+        )
+
+        cache = load_building_cache(cache_path)
+        stats = collect_cache_stats(cache)
+        st.markdown(
+            f"- 当前缓存小区数：**{stats['community_count']}**\n"
+            f"- 当前缓存楼栋数：**{stats['building_count']}**\n"
+            f"- 当前缓存文件：`{Path(cache_path).name}`"
+        )
+
+        if cache:
+            community_rows = []
+            for community_name, entry in sorted(cache.items(), key=lambda x: len(list((x[1] or {}).get("buildings", []) or [])), reverse=True):
+                building_count = len(list((entry or {}).get("buildings", []) or []))
+                community_rows.append(
+                    {
+                        "小区名": community_name,
+                        "楼栋数": building_count,
+                        "来源": str((entry or {}).get("source", "")).strip() or "—",
+                        "更新时间": str((entry or {}).get("updated_at", "")).strip() or "—",
+                    }
+                )
+            st.dataframe(community_rows, use_container_width=True, hide_index=True)
+        else:
+            st.info("当前还没有楼栋缓存。先查询几栋楼，缓存会自动增长。")
+
+        export_payload = build_cache_export_payload(cache, app_version="v514")
+        export_text = json.dumps(export_payload, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="导出当前楼栋缓存",
+            data=export_text,
+            file_name="quietbj_cache_export_v1.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+        st.markdown("---")
+        st.markdown("**导入楼栋缓存**")
+        st.markdown(
+            "- 合并导入：保留当前缓存，并把导入文件里的楼栋点合并进来。\n"
+            "- 完全覆盖：用导入文件直接替换当前缓存。"
+        )
+        uploaded = st.file_uploader("选择缓存备份 JSON 文件", type=["json"], key="cache_import_uploader")
+        import_mode = st.radio(
+            "导入方式",
+            ["合并导入", "完全覆盖"],
+            horizontal=True,
+            key="cache_import_mode",
+        )
+
+        if uploaded is not None:
+            try:
+                payload = json.loads(uploaded.getvalue().decode("utf-8"))
+                ok, msg, normalized = normalize_import_payload(payload)
+                if not ok:
+                    st.error(msg)
+                else:
+                    import_stats = collect_cache_stats(normalized)
+                    st.success(
+                        f"导入文件可用：小区 {import_stats['community_count']} 个，楼栋 {import_stats['building_count']} 栋。"
+                    )
+                    st.caption(
+                        f"schema_version = {payload.get('schema_version', '')}，"
+                        f"导出时间 = {payload.get('exported_at', '')}，"
+                        f"app_version = {payload.get('app_version', '')}"
+                    )
+                    if st.button("执行导入", type="primary", use_container_width=True, key="cache_import_button"):
+                        if import_mode == "合并导入":
+                            merged = merge_cache_payload(cache, payload)
+                            save_building_cache(merged, cache_path)
+                            merged_stats = collect_cache_stats(merged)
+                            st.success(
+                                f"合并导入完成：当前共 {merged_stats['community_count']} 个小区，"
+                                f"{merged_stats['building_count']} 栋楼。"
+                            )
+                        else:
+                            replaced = replace_cache_from_payload(payload)
+                            save_building_cache(replaced, cache_path)
+                            replaced_stats = collect_cache_stats(replaced)
+                            st.success(
+                                f"完全覆盖完成：当前共 {replaced_stats['community_count']} 个小区，"
+                                f"{replaced_stats['building_count']} 栋楼。"
+                            )
+                        st.rerun()
+            except Exception as e:
+                st.error(f"导入失败：{e}")
+
+        st.markdown("---")
+        st.markdown("**缓存清理**")
+        community_names = sorted(cache.keys())
+        target_community = st.selectbox(
+            "删除某个小区缓存",
+            ["— 不删除 —"] + community_names,
+            index=0,
+            key="cache_delete_target",
+        )
+        confirm_delete_one = st.checkbox("我确认要删除选中的小区缓存", key="confirm_delete_one")
+        if st.button("删除选中小区缓存", use_container_width=True, key="delete_one_cache"):
+            if target_community == "— 不删除 —":
+                st.warning("请先选择一个小区。")
+            elif not confirm_delete_one:
+                st.warning("请先勾选确认框。")
+            else:
+                cache = dict(cache)
+                cache.pop(target_community, None)
+                save_building_cache(cache, cache_path)
+                st.success(f"已删除：{target_community}")
+                st.rerun()
+
+        confirm_clear_all = st.checkbox("我确认要清空全部楼栋缓存", key="confirm_clear_all")
+        if st.button("清空全部缓存", use_container_width=True, key="clear_all_cache"):
+            if not confirm_clear_all:
+                st.warning("请先勾选确认框。")
+            else:
+                save_building_cache({}, cache_path)
+                st.success("已清空全部楼栋缓存。")
+                st.rerun()
+
 def render_debug_card(geocode_used: dict[str, Any] | None, building_location_text: str, community_row: dict[str, Any], tip_list: list[dict[str, Any]], regeo: dict[str, Any] | None) -> None:
     with st.expander("地址识别核查", expanded=False):
         c1, c2 = st.columns(2)
@@ -1204,6 +1396,10 @@ def render_debug_card(geocode_used: dict[str, Any] | None, building_location_tex
             st.write(f"楼栋缓存：{COMMUNITY_BUILDING_CACHE_FILE.name}")
             st.write("评分架构：主 engine 汇总 / 从属 engine 出分")
             st.write("道路逻辑：高速/主干/次干/小路分别保留，遮挡修正单独作为缓冲项叠加，不会替代高速因素。")
+            st.write("原始道路候选：")
+            st.write((regeo or {}).get("_raw_roads_debug", []))
+            st.write("说明：v516 正式查询不再调 input_tips；道路只使用 reverse geocode 返回的 roads，本地分级筛选；POI 默认只查轨道/商业/餐饮三类。")
+            st.write("说明：v511 只使用 reverse geocode 返回的 roads，本地分级筛选；同一地址的 geocode / regeo / around 已加缓存。")
         with c2:
             st.markdown("**高德候选**")
             if tip_list:
@@ -1256,16 +1452,24 @@ def main() -> None:
         return
 
     community_row, tip_list, regeo, building_location_text, geocode_used = parse_geocode_result(query, community_repo, amap)
+    regeo = augment_regeo_with_high_priority_roads(amap, building_location_text, regeo)
     community_row = apply_building_override(community_row, query, building_overrides)
     update_building_cache_for_current_result(community_row, building_location_text)
+    # 这一组固定只查 5 次周边搜索，用来得到学校 / 医院 / 商业 / 餐饮 / 轨道。
+    # 这里也走缓存；同一个楼点重复 rerun 时，不会反复打高德。
     poi_results: dict[str, list[dict[str, Any]]] = {}
     if amap.enabled() and building_location_text:
+        # v512 节约 API：
+        # 1) 保留轨道：对安静度影响直观，且对楼盘差异较敏感
+        # 2) 保留商业：合并便利店/超市/商场/生活服务，近场活跃度用这一笔估算
+        # 3) 保留餐饮：夜间和底商扰动相对更强，单独保留
+        # 4) 学校 / 医院默认不查，后续可做“深度模式”再加
         poi_results = {
-            "school": amap.search_around(building_location_text, "学校", radius=1200),
-            "hospital": amap.search_around(building_location_text, "医院", radius=1500),
-            "commercial": amap.search_around(building_location_text, "便利店 超市 商场 购物服务 生活服务", radius=300),
-            "restaurant": amap.search_around(building_location_text, "餐饮服务", radius=300),
-            "rail": amap.search_around(building_location_text, "地铁站", radius=800),
+            "school": [],
+            "hospital": [],
+            "commercial": cached_search_around(amap.api_key, building_location_text, "便利店 超市 商场 购物服务 生活服务", radius=300),
+            "restaurant": cached_search_around(amap.api_key, building_location_text, "餐饮服务", radius=300),
+            "rail": cached_search_around(amap.api_key, building_location_text, "地铁站", radius=800),
         }
     community_code = str(community_row.get("community_code", ""))
     zone_options = zone_repo.get_by_community(community_code)

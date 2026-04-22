@@ -1,0 +1,12 @@
+Python 编译检查：
+[OK] amap_provider.py
+[OK] app.py
+[OK] building_engine.py
+[OK] community_repository.py
+[OK] config.py
+[OK] engine_schema.py
+[OK] noise_point_engine.py
+[OK] score_engine.py
+[OK] shielding_engine.py
+[OK] text_match.py
+[OK] zone_repository.py
