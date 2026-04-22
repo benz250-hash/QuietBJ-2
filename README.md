@@ -30,3 +30,9 @@ Notes:
 - app.py remains the orchestration layer.
 - score_engine.py is the main engine.
 - subordinate engines return EngineResult objects.
+
+
+v508 patch notes:
+- Fixed penalty card to display main-engine adopted deltas.
+- Shielding correction now shows as a separate positive buffering item.
+- Highway / arterial / other road factors remain independent and are not replaced by shielding.

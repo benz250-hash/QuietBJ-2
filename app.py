@@ -401,23 +401,43 @@ def build_engine_results(
 
 def build_noise_summary_from_breakdown(breakdown: Any) -> dict[str, Any]:
     signals: list[dict[str, Any]] = []
-    for item in list(getattr(breakdown, "results", []) or []):
-        value = int(getattr(item, "effective_score_delta", 0))
-        if value == 0:
+    adopted_results = list(getattr(breakdown, "results", []) or [])
+
+    for item in adopted_results:
+        raw_value = int(getattr(item, "raw_score_delta", 0))
+        effective_value = int(getattr(item, "effective_score_delta", 0))
+        if raw_value == 0 and effective_value == 0:
             continue
+
         display = getattr(item, "display", {}) or {}
         evidence = getattr(item, "evidence", {}) or {}
+
+        detail = display.get("detail") or getattr(item, "explanation", "")
+        # 让遮挡修正明确显示“原始 -> 遮挡后”
+        if str(getattr(item, "category", "")) == "shielding":
+            raw_impact = evidence.get("raw_impact")
+            adjusted_impact = evidence.get("adjusted_impact")
+            shielding_level = evidence.get("shielding_level", "")
+            blocker_count = evidence.get("blocker_count", 0)
+            if raw_impact not in ("", None) and adjusted_impact not in ("", None):
+                detail = f"原始影响 {raw_impact} → 遮挡后 {adjusted_impact}｜{shielding_level}｜挡住 {blocker_count} 栋"
+
         signals.append(
             {
                 "label": display.get("label") or getattr(item, "engine", ""),
-                "detail": display.get("detail") or getattr(item, "explanation", ""),
-                "score_delta": value,
-                "value_text": f"{value:+d}",
+                "detail": detail,
+                "score_delta": effective_value,
+                "raw_score_delta": raw_value,
+                "value_text": f"{effective_value:+d}",
                 "distance_m": evidence.get("distance_m", evidence.get("poi_distance_m", "-")),
                 "category": getattr(item, "category", ""),
+                "engine": getattr(item, "engine", ""),
+                "evidence": evidence,
             }
         )
-    return {"signals": signals, "total_penalty": sum(-x["score_delta"] for x in signals if x["score_delta"] < 0)}
+
+    total_penalty = sum(abs(x["score_delta"]) for x in signals if int(x["score_delta"]) < 0)
+    return {"signals": signals, "total_penalty": total_penalty}
 
 
 def result_dict_from_breakdown(
@@ -1183,6 +1203,7 @@ def render_debug_card(geocode_used: dict[str, Any] | None, building_location_tex
             st.write(f"人工校正规则：{str(community_row.get('_override_zone_type', '')).strip() or '—'}")
             st.write(f"楼栋缓存：{COMMUNITY_BUILDING_CACHE_FILE.name}")
             st.write("评分架构：主 engine 汇总 / 从属 engine 出分")
+            st.write("道路逻辑：高速/主干/次干/小路分别保留，遮挡修正单独作为缓冲项叠加，不会替代高速因素。")
         with c2:
             st.markdown("**高德候选**")
             if tip_list:
