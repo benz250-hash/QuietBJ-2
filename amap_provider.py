@@ -66,7 +66,7 @@ class AMapProvider:
             "key": self.api_key,
             "location": location.strip(),
             "extensions": "all",
-            "roadlevel": "0",
+            "roadlevel": "1",
             "radius": "1200",
             "output": "JSON",
         }
