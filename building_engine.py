@@ -6,13 +6,23 @@ from typing import Any
 from engine_schema import DisplayPayload, EngineResult
 
 
-def _to_float(value: Any) -> float | None:
-    try:
-        if value in ("", None):
-            return None
-        return float(value)
-    except Exception:
-        return None
+def zone_result(zone_type: str, locator_confidence: str = "中") -> EngineResult:
+    return EngineResult(
+        engine="building_engine",
+        enabled=True,
+        score_delta=0,
+        confidence=1.0,
+        category="zone",
+        priority=70,
+        evidence={"zone_type": zone_type, "locator_confidence": locator_confidence},
+        explanation=f"楼栋位置证据：{zone_type}。",
+        display=DisplayPayload(
+            label="楼栋位置证据",
+            detail=f"{zone_type}｜定位置信度 {locator_confidence}",
+            value_text="",
+        ),
+        tags=["evidence_only", "zone"],
+    )
 
 
 def building_year_result(build_year: Any) -> EngineResult:
@@ -45,7 +55,7 @@ def density_result(far_ratio: Any) -> EngineResult:
         evidence={"far_ratio": far_ratio},
         explanation="容积率证据。",
         display=DisplayPayload(
-            label="建筑密度",
+            label="密度证据",
             detail=f"容积率 {far_ratio if far_ratio not in ('', None) else '-'}",
             value_text="",
         ),
@@ -53,35 +63,20 @@ def density_result(far_ratio: Any) -> EngineResult:
     )
 
 
-def zone_result(zone_type: str, locator_confidence: str = "中") -> EngineResult:
-    return EngineResult(
-        engine="building_engine",
-        enabled=False,
-        score_delta=0,
-        confidence=0.0,
-        category="zone",
-        priority=0,
-        evidence={"zone_type": zone_type, "locator_confidence": locator_confidence},
-        explanation="旧楼栋位置调整逻辑已退出主评分链。",
-        display=DisplayPayload(
-            label="旧位置逻辑",
-            detail=f"{zone_type}｜{locator_confidence}",
-            value_text="",
-        ),
-        tags=["deprecated"],
-    )
-
-
 def override_result(label: str, score_delta: int = 0, notes: str = "") -> EngineResult:
     return EngineResult(
         engine="override_engine",
-        enabled=False,
+        enabled=True,
         score_delta=0,
-        confidence=0.0,
+        confidence=1.0,
         category="override",
-        priority=0,
+        priority=100,
         evidence={"notes": notes, "label": label},
-        explanation="旧人工校正逻辑已退出主评分链。",
-        display=DisplayPayload(label=label or "旧人工校正", detail=notes, value_text=""),
-        tags=["deprecated"],
+        explanation=notes or "人工校正规则证据。",
+        display=DisplayPayload(
+            label=label,
+            detail=notes,
+            value_text="",
+        ),
+        tags=["evidence_only", "override"],
     )
