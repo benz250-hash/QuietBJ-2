@@ -404,51 +404,18 @@ def augment_regeo_with_high_priority_roads(
     building_location_text: str,
     regeo: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
+    # v514 热修复：
+    # 这里只保留 reverse geocode 返回的 roads，并做本地去重。
+    # 不再在 app.py 中做高速补查，也不再引用 classify_road_kind。
     base = dict(regeo or {})
     roads = list(base.get("roads", []) or [])
-
-    # 先看 reverse geocode 是否已经带出高速
-    has_expressway = any(
-        classify_road_kind(str(item.get("name", "")).strip()) == "expressway"
-        for item in roads
-    )
-
-    supplemental: list[dict[str, Any]] = []
-    if amap.enabled() and building_location_text and not has_expressway:
-        # 只在缺高速时补查，控制 API 用量
-        fallback_keywords = [
-            "高速",
-            "快速路",
-            "环路",
-            "高架",
-            "G6",
-            "G7",
-            "G4",
-            "G45",
-        ]
-        for kw in fallback_keywords:
-            for poi in amap.search_around(building_location_text, kw, radius=1800):
-                name = str(poi.get("name", "")).strip()
-                if not name:
-                    continue
-                if classify_road_kind(name) != "expressway":
-                    continue
-                supplemental.append(
-                    {
-                        "name": name,
-                        "distance": poi.get("distance", ""),
-                        "location": poi.get("location", ""),
-                        "source": "fallback_search",
-                    }
-                )
-
-    merged = dedupe_road_candidates(roads + supplemental)
+    merged = dedupe_road_candidates(roads)
     base["roads"] = merged
     base["_raw_roads_debug"] = [
         {
             "name": str(item.get("name", "")).strip(),
             "distance": str(item.get("distance", "")).strip(),
-            "source": str(item.get("source", "regeo")).strip() or "regeo",
+            "source": "regeo",
         }
         for item in merged
     ]
